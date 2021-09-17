@@ -24,7 +24,7 @@ unsigned long longestInterval;
 unsigned long firstRealySavedTime = 0;
 unsigned long secondRealySavedTime = 0;
 
-unsigned long intervals[] = {5000, 2500, 3000, 1000, 7000};
+unsigned long intervals[] = {5000, 4500, 3000, 1000, 7000};
 
 
 void showMessage(String message) {
@@ -63,7 +63,7 @@ void showMenu() {
 
 }
 
-void checkContainer() {
+void checkContainerMessage() {
   if(waterContainerOpen && !waterLevel) {
         lcd.clear();
         lcd.setCursor(0,1);
@@ -77,7 +77,7 @@ void checkContainer() {
       }
 }
 
-void openRelay() {
+void openRelay(bool waterAll) {
   unsigned long currentMillis = millis();
   enableWatering = true;
 
@@ -90,9 +90,17 @@ void openRelay() {
       }
     }
 
-    digitalWrite(RELAY_PIN_2, LOW);
-    digitalWrite(RELAY_PIN_1, LOW);
-
+    if (!plants[0] || waterAll) {
+      Serial.println(!plants[0]);
+      Serial.println(waterAll);
+      digitalWrite(RELAY_PIN_1, LOW);
+    }
+    if (!plants[1] || waterAll) {
+      Serial.println(!plants[1]);
+      Serial.println(waterAll);
+      digitalWrite(RELAY_PIN_2, LOW);
+    }
+  
     lcd.clear();
     lcd.setCursor(0,1);
     lcd.print("OTWIERAM ZAWORY");
@@ -152,18 +160,9 @@ void loop() {
 
   if (btt_state_top == LOW) {
     if(waterLevel && !waterContainerOpen){
-      lcd.clear();
-      lcd.setCursor(0,1);
-      lcd.print("OTWIERAM ZAWORY");
-      lcd.setCursor(0,2);
-      lcd.print("Podlewanie w toku");
-
-      digitalWrite(RELAY_PIN_2, LOW);
-      delay(5000);
-      digitalWrite(RELAY_PIN_2, HIGH);
-      showMenu();
+      openRelay(false);
     } else {
-      checkContainer();
+      checkContainerMessage();
     }
   }
 
@@ -180,6 +179,10 @@ void loop() {
     showMenu();
   }
   if (btt_state_bottom == LOW || enableWatering) {
-    openRelay();
+    if(waterLevel && !waterContainerOpen){
+      openRelay(true);
+    } else {
+      checkContainerMessage();
+    }
   }
 }
