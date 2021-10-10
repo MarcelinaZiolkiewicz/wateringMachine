@@ -2,21 +2,39 @@
 #include <Wire.h> 
 #include <LiquidCrystal_I2C.h>
 #include <EEPROM.h>
+#include <Adafruit_NeoPixel.h>
 
 LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 16 chars and 2 line display
+Adafruit_NeoPixel pixels(8, A0, NEO_GRB + NEO_KHZ800);
 
 //TODO
 /*
   WAŻNE
- - podpiąć czujnik zamknięcia i sprawdzaź przed pompowaniem 
- - zapisywanie trybu w którym pracuje stacja
-  
+ - poprawić napis zapisano, żeby w innych zakładkach też się tak robiło
+ - przerywanie pracy w przypadku otworzenia zbiornika z woda - zawory otwarte while(waterContainerOpen); 
+ - po podlaniu ręcznym powinny się resetować czasy w trybie czasowym na 0, albo zrobić menu z innymi opcjami i tam będzie moża wybrać czy resetować czy nie
+ - komunikat dźwiękowy buzzerem, do wyłączenia w ustawieniach 
+ - zablokować możliwość zmiany interwałów jeśli zawór jest zamknięty
+
   MNIEJ WAŻNE
- - priorytet ręcznego podlewania nad automatycznym
+ - komunikaty led - mruganie na zmianę, kiedy i na jakie kolory
+ - wytestować dotykowy przycisk
+ - może dodać czujnik wilgotności dth22 - nad zaworami, pokazywałby temperaturę i wilgotność jaka panuje obok kwiatów
  - Animacja z trzena kropkami kiedy otwarte są zawory 
  - wygaszanie ekranu co jakiś czas dla oszczędzania energii
  - wyświetlanie odliczania w dół pod napisem o otwartych zaworach 
 */
+
+/*
+BŁĘDY
+
+x1 - błąd menu opcji
+x2 - 
+x3 - 
+x4 - 
+x5 - 
+
+*/ 
 
 //relays
 const byte RELAYS[] = {11,12,13,9,8};
@@ -27,10 +45,12 @@ const byte BTT_LEFT = 4;
 const byte BTT_RIGHT = 5;
 const byte BTT_CENTER = 6;
 const byte BTT_BOTTOM = 3;
-byte workMode = 0;
-byte addressesINT[] = {0,4,8,12,16}; 
-byte addressesWAT[] = {20,24,28,32,36};
-byte addressesWORK[] = {40,41,42,43,44};
+const byte CLOSURE_SENSOR = 7;
+
+const byte addressesINT[] = {0,4,8,12,16}; 
+const byte addressesWAT[] = {20,24,28,32,36};
+const byte addressesWORK[] = {40,41,42,43,44};
+const byte addressesOPT[] = {45,46,47,48,49};
 
 //test
 bool waterLevel = true;
@@ -43,9 +63,18 @@ bool firstLoop[] = {true,true,true,true,true};
 bool isMenuOpen = false;
 bool isIntervalMenuOpen = false;
 bool isWateringMenuOpen = false;
+bool isOptionsMenuOpen = false;
 bool relayToOpen[] = {false,false,false,false,false};
-bool workingRelay[] = {true,true,true,true,true};
+bool workingRelay[] = {true,true,true,true,true,true};
 bool firstTimeLoop = false;
+
+//settings
+bool isLedOn = true;
+bool resetTime = true;
+bool soundEnable = true;
+byte workMode = 0;
+unsigned long screenLightTime = 20000;
+
 
 unsigned long buttonPushedMillis;
 unsigned long wateringTimeMillis[] = {0,0,0,0,0};
@@ -60,12 +89,7 @@ int counter;
 int menuPosition = 0;
 int intervalsMenuPosition = 0;
 int wateringMenuPosition = 0;
-
-void showMessage(String message) {
-   lcd.clear();
-   lcd.setCursor(0,1);
-   lcd.print(message);
-}
+int optionsMenuPosition = 0;
 
 String calculateTime(unsigned long number, byte i) {
  
@@ -113,78 +137,74 @@ String showWorkMode() {
   }
 }
 
+String ifTrueSaidOn(bool value){
+  if (value){
+    return "tak";
+  } else {
+    return "nie";
+  }
+}
+
+void lcdPrint(int cursor, int line, String meessage){
+  lcd.setCursor(cursor, line);
+  lcd.print(meessage);
+}
+
 void showMenu() {
   isMenuOpen = true;
-
   lcd.clear();
-  lcd.setCursor(0,0);
 
   switch (menuPosition)
   {
-  case 7:
+  case 8:
   case 0: 
-    lcd.print("-> Podlej wszystkie");
-    lcd.setCursor(0,1);
-    lcd.print("Podlej suche");
-    lcd.setCursor(0,2);
-    lcd.print("Ustaw interwaly");
-    lcd.setCursor(0,3);
-    lcd.print("Ustaw automat");
+    lcdPrint(0,0, "-> Podlej wszystkie");
+    lcdPrint(0,1, "Podlej suche");
+    lcdPrint(0,2, "Ustaw interwaly");
+    lcdPrint(0,3, "Ustaw automat");
     break;
   case 1:
-    lcd.print("-> Podlej suche");
-    lcd.setCursor(0,1);
-    lcd.print("Ustaw interwaly");
-    lcd.setCursor(0,2);
-    lcd.print("Ustaw automat");
-    lcd.setCursor(0,3);
-    lcd.print("Testuj");
+    lcdPrint(0,0,"-> Podlej suche");
+    lcdPrint(0,1,"Ustaw interwaly");
+    lcdPrint(0,2,"Ustaw automat");
+    lcdPrint(0,3,"Testuj");
     break;
   case 2:
-    lcd.print("-> Ustaw interwaly");
-    lcd.setCursor(0,1);
-    lcd.print("Ustaw automat");
-    lcd.setCursor(0,2);
-    lcd.print("Testuj");
-    lcd.setCursor(0,3);
-    lcd.print("Tryb: " + showWorkMode());
+    lcdPrint(0,0,"-> Ustaw interwaly");
+    lcdPrint(0,1,"Ustaw automat");
+    lcdPrint(0,2,"Testuj");
+    lcdPrint(0,3,"Wilgotnosc ziemi");
     break;
   case 3:
-    lcd.print("-> Ustaw automat");
-    lcd.setCursor(0,1);
-    lcd.print("Testuj");
-    lcd.setCursor(0,2);
-    lcd.print("Tryb: " + showWorkMode());
-    lcd.setCursor(0,3);
-    lcd.print("Cofnij");
+    lcdPrint(0,0,"-> Ustaw automat");
+    lcdPrint(0,1,"Testuj");
+    lcdPrint(0,2,"Wilgotnosc ziemi");
+    lcdPrint(0,3,"Ustawienia");
     break;
   case 4:
-    lcd.print("-> Testuj");
-    lcd.setCursor(0,1);
-    lcd.print("Tryb: " + showWorkMode());
-    lcd.setCursor(0,2);
-    lcd.print("Cofnij");
-    lcd.setCursor(0,3);
-    lcd.print("Podlej wszystkie");
+    lcdPrint(0,0,"-> Testuj");
+    lcdPrint(0,1,"Wilgotnosc ziemi");
+    lcdPrint(0,2,"Ustawienia");
+    lcdPrint(0,3,"Cofnij");
     break;
   case 5:
-    lcd.print("-> Tryb: " + showWorkMode());
-    lcd.setCursor(0,1);
-    lcd.print("Cofnij");
-    lcd.setCursor(0,2);
-    lcd.print("Podlej wszystkie");
-    lcd.setCursor(0,3);
-    lcd.print("Podlej suche");
+    lcdPrint(0,0,"-> Wilgotnosc ziemi");
+    lcdPrint(0,1,"Ustawienia");
+    lcdPrint(0,2,"Cofnij");
+    lcdPrint(0,3,"Podlej wszystkie");
+    break;
+  case 6:
+    lcdPrint(0,0,"-> Ustawienia");
+    lcdPrint(0,1,"Cofnij");
+    lcdPrint(0,2,"Podlej wszystkie");
+    lcdPrint(0,3,"Podlej suche");
     break;
   case -1:
-  case 6:
-    lcd.print("-> Cofnij");
-    lcd.setCursor(0,1);
-    lcd.print("Podlej wszystkie");
-    lcd.setCursor(0,2);
-    lcd.print("Podlej suche");
-    lcd.setCursor(0,3);
-    lcd.print("Ustaw interwaly");
+  case 7:
+    lcdPrint(0,0,"-> Cofnij");
+    lcdPrint(0,1,"Podlej wszystkie");
+    lcdPrint(0,2,"Podlej suche");
+    lcdPrint(0,3,"Ustaw interwaly");
     break;
 
   default:
@@ -193,6 +213,7 @@ void showMenu() {
   }
 }
 
+//do poprawy
 void intervalsMenu() {
   isIntervalMenuOpen = true;
   
@@ -203,9 +224,9 @@ void intervalsMenu() {
   {
   case 7:
   case 0: 
-    lcd.print("-> Roslina 1: " + calculateTime(intervals[0], 0));
+    lcd.print("-> Roslina 1: " + calculateTime(intervals[0],0));
     lcd.setCursor(0,1);
-    lcd.print("Roslina 2: " + calculateTime(intervals[1], 1));
+    lcd.print("Roslina 2: " + calculateTime(intervals[1],1));
     lcd.setCursor(0,2);
     lcd.print("Roslina 3: " + calculateTime(intervals[2],2));
     lcd.setCursor(0,3);
@@ -272,6 +293,67 @@ void intervalsMenu() {
   }
 }
 
+void optionsMenu() {
+  isOptionsMenuOpen = true;
+  lcd.clear();
+
+  switch (optionsMenuPosition)
+  {
+  case 7:
+  case 0:
+    lcdPrint(0,0, "-> Tryb: " + showWorkMode());
+    lcdPrint(0,1, "Dzwiek: " + ifTrueSaidOn(soundEnable));
+    lcdPrint(0,2, "LED: " + ifTrueSaidOn(isLedOn));
+    lcdPrint(0,3, "Resetowanie: " + ifTrueSaidOn(resetTime));
+    break;
+  
+  case 1:
+    lcdPrint(0,0, "-> Dzwiek: " + ifTrueSaidOn(soundEnable));
+    lcdPrint(0,1, "LED: " + ifTrueSaidOn(isLedOn));
+    lcdPrint(0,2, "Resetowanie: " + ifTrueSaidOn(resetTime));
+    lcdPrint(0,3, "Ekran: " + calculateTime(screenLightTime, workingRelay[5]));
+    break;
+  
+  case 2:
+    lcdPrint(0,0, "-> LED: " + ifTrueSaidOn(isLedOn));
+    lcdPrint(0,1, "Resetowanie: " + ifTrueSaidOn(resetTime));
+    lcdPrint(0,2, "Ekran: " + calculateTime(screenLightTime, workingRelay[5]));
+    lcdPrint(0,3, "Zapisz");
+    break;
+  
+  case 3:
+    lcdPrint(0,0, "-> Resetowanie: " + ifTrueSaidOn(resetTime));
+    lcdPrint(0,1, "Ekran: " + calculateTime(screenLightTime, workingRelay[5]));
+    lcdPrint(0,2, "Zapisz");
+    lcdPrint(0,3, "Cofnij");
+    break;
+  
+  case 4:
+    lcdPrint(0,0, "-> Ekran: " + calculateTime(screenLightTime, workingRelay[5]));
+    lcdPrint(0,1, "Zapisz");
+    lcdPrint(0,2, "Cofnij");
+    lcdPrint(0,3, "Tryb: " + showWorkMode());
+    break;
+  case 5:
+    lcdPrint(0,0, "-> Zapisz");
+    lcdPrint(0,1, "Cofnij");
+    lcdPrint(0,2, "Tryb: " + showWorkMode());
+    lcdPrint(0,3, "Dzwiek: " + ifTrueSaidOn(soundEnable));
+    break;
+  case -1:
+  case 6:
+    lcdPrint(0,0, "-> Cofnij");
+    lcdPrint(0,1, "Tryb: " + showWorkMode());
+    lcdPrint(0,2, "Dzwiek: " + ifTrueSaidOn(soundEnable));
+    lcdPrint(0,3, "LED: " + ifTrueSaidOn(isLedOn));
+    break;
+  default:
+    lcdPrint(0,1, "Blad x1");
+    break;
+  }
+}
+
+//do poprawy
 void wateringTime() {
   isWateringMenuOpen = true;
   
@@ -353,18 +435,15 @@ void wateringTime() {
 
 void showStartMenu() {
   lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print("Poziom wody: ");
-  lcd.setCursor(13,0);
-  
+  lcdPrint(0,0,"Poziom wody: ");
+
   if (waterLevel) {
-    lcd.print("OK");
+    lcdPrint(0,13,"OK");
   } else {
-    lcd.print("PUSTO!");
+    lcdPrint(0,13,"PUSTO!");
   }
 
-  lcd.setCursor(0,1);
-  lcd.print("Do podlania: ");
+  lcdPrint(0,1,"Do podlania: ");
 
   counter = 0;
   for(byte i = 0; i <= 4; i++) {
@@ -374,14 +453,9 @@ void showStartMenu() {
   }
   lcd.print(counter);
 
-  
-  lcd.setCursor(0,2);
-  lcd.print("Tryb: " + showWorkMode());
-
-  lcd.setCursor(0,3);
-  lcd.print("Otworz menu -> ");
-  lcd.setCursor(16,3);
-  lcd.print("(OK)");
+  lcdPrint(0,2,"Tryb: " + showWorkMode());
+  lcdPrint(0,3,"Otworz menu -> ");
+  lcdPrint(16,3,"(OK)");
 
 }
 
@@ -407,14 +481,12 @@ void checkContainerMessage() {
 
     if(waterContainerOpen && !waterLevel) {
         lcd.clear();
-        lcd.setCursor(0,1);
-        lcd.print("Zamknij zbiornik!");
-        lcd.setCursor(0,2);
-        lcd.print("Uzupelnij wode!");
+        lcdPrint(0,1,"Zamknij zbiornik!");
+        lcdPrint(0,2,"Uzupelnij wode!");
     } else if (waterContainerOpen){
-      showMessage("Zamknij zbiornik!");
+      lcdPrint(0,2,"Zamknij zbiornik!");
     } else {
-      showMessage("Uzupelnij wode!");
+      lcdPrint(0,2,"Uzupelnij wode!");
     }
 
     firstRun = false;
@@ -427,6 +499,7 @@ void checkContainerMessage() {
   }
 }
 
+//spróbować z przewijaniem komunikatu
 void thereIsNoPlants() {
   unsigned long currentMillis = millis();
   enableWatering = true;
@@ -436,10 +509,8 @@ void thereIsNoPlants() {
     buttonPushedMillis = currentMillis;
 
     lcd.clear();
-    lcd.setCursor(0,1);
-    lcd.print("Rosliny sa juz");
-    lcd.setCursor(0,2);
-    lcd.print("podlane");
+    lcdPrint(0,1,"Rosliny sa juz");
+    lcdPrint(0,2,"podlane");
 
     firstRun = false;
   }
@@ -461,21 +532,23 @@ void openRelay(bool waterAll) {
 
     for(byte i = 0; i < 5; i++){
       if (longestInterval < intervals[i]){
-        longestInterval = intervals[i];
+        if(workingRelay[i]){
+          longestInterval = intervals[i];
+        }
       }
     }
 
     for(byte i = 0; i < 5; i++){
       if (!plants[i] || waterAll) {
-      digitalWrite(RELAYS[i], HIGH);
+        if (workingRelay[i]){
+          digitalWrite(RELAYS[i], HIGH);
+        }
       }
     } 
   
     lcd.clear();
-    lcd.setCursor(0,1);
-    lcd.print("OTWIERAM ZAWORY");
-    lcd.setCursor(0,2);
-    lcd.print("Podlewanie w toku");
+    lcdPrint(0,1, "OTWIERAM ZAWORY");
+    lcdPrint(0,2, "Podlewanie w toku");
 
     firstRun = false;
   }
@@ -537,28 +610,7 @@ void resetMillis(unsigned long globalMillis) {
 
 }
 
-void setup() {
-  lcd.init(); 
-  lcd.backlight();
-  showStartMenu();
-
-  //initialization
-  Serial.begin(9600);
-  pinMode(BTT_TOP, INPUT_PULLUP);
-  pinMode(BTT_LEFT, INPUT_PULLUP);
-  pinMode(BTT_RIGHT, INPUT_PULLUP);
-  pinMode(BTT_CENTER, INPUT_PULLUP);
-  pinMode(BTT_BOTTOM, INPUT_PULLUP);
-  
-  pinMode(RELAYS[0], OUTPUT);
-  pinMode(RELAYS[1], OUTPUT);
-  pinMode(RELAYS[2], OUTPUT);
-  pinMode(RELAYS[3], OUTPUT);
-  pinMode(RELAYS[4], OUTPUT);
-
-  
-
-  Serial.println("Connected");
+void readAllDataFromEEPROM() {
   Serial.println("Wczytuje z EEPROM: ");
 
   for(byte i = 0; i < 5; i++){
@@ -572,13 +624,48 @@ void setup() {
   for(byte i = 0; i < 5; i++){
     workingRelay[i] = readValueFromEEPROMBool(addressesWORK[i]);
   };
+
+  workMode = readValueFromEEPROMBool(addressesOPT[0]);
+  soundEnable =  readValueFromEEPROMBool(addressesOPT[1]);
+  isLedOn = readValueFromEEPROMBool(addressesOPT[2]);
+  resetTime = readValueFromEEPROMBool(addressesOPT[3]); 
+  screenLightTime = readValueFromEEPROM(addressesOPT[4]);
+
   Serial.println("Wczytano");
+}
+
+void setup() {
+  lcd.init(); 
+  lcd.backlight();
+  pixels.begin();
+  pixels.show();
+
+  //initialization
+  Serial.begin(9600);
+  pinMode(BTT_TOP, INPUT_PULLUP);
+  pinMode(BTT_LEFT, INPUT_PULLUP);
+  pinMode(BTT_RIGHT, INPUT_PULLUP);
+  pinMode(BTT_CENTER, INPUT_PULLUP);
+  pinMode(BTT_BOTTOM, INPUT_PULLUP);
+
+  pinMode(CLOSURE_SENSOR, INPUT_PULLUP);
+  
+  pinMode(RELAYS[0], OUTPUT);
+  pinMode(RELAYS[1], OUTPUT);
+  pinMode(RELAYS[2], OUTPUT);
+  pinMode(RELAYS[3], OUTPUT);
+  pinMode(RELAYS[4], OUTPUT);
+
+  Serial.println("Board connected");
+
+  readAllDataFromEEPROM();
+  showStartMenu();
 }
 
 void loop() {  
   unsigned long globalMillis = millis();;
 
-  if(workMode == 2) {
+  if(workMode == 2 ) {
 
     resetMillis(globalMillis);
  
@@ -590,6 +677,12 @@ void loop() {
     }
   }
   
+  if(digitalRead(CLOSURE_SENSOR) == LOW){
+    waterContainerOpen = false;
+  } else {
+    waterContainerOpen = true;
+  }
+
   closeSingleRelay();
 
   int btt_state_top = digitalRead(BTT_TOP); 
@@ -603,7 +696,7 @@ void loop() {
     if (isMenuOpen)
     {
       if(menuPosition < 0){
-      menuPosition = 6;
+      menuPosition = 7;
       showMenu();
       } else {
         --menuPosition;
@@ -633,13 +726,23 @@ void loop() {
         wateringTime();
       }
     }
-    
+    if(isOptionsMenuOpen){
+      if(optionsMenuPosition < 0){
+      optionsMenuPosition = 6;
+      optionsMenu();
+      } else {
+        --optionsMenuPosition;
+        delay(200L); 
+        optionsMenu();
+      }
+    }
     
   }
+  
   //W dół
   if (btt_state_bottom == LOW) {
     if(isMenuOpen) {
-      if(menuPosition > 6){
+      if(menuPosition > 7){
       menuPosition = 0;
       showMenu();
       } else {
@@ -669,8 +772,19 @@ void loop() {
         wateringTime();
       }
     }
+    if(isOptionsMenuOpen){
+      if(optionsMenuPosition > 6){
+      optionsMenuPosition = 0;
+      optionsMenu();
+      } else {
+        ++optionsMenuPosition;
+        delay(200L); 
+        optionsMenu();
+      }
+    }
   }
-  //zmiana interwałów w dół
+  
+  //lewo
   if (btt_state_left == LOW ) {
     if (isIntervalMenuOpen)
     {
@@ -678,10 +792,10 @@ void loop() {
       {
         if (intervalsMenuPosition == i ) 
         {
-          if (i == 6 && intervals[0] > 500) {
+          if (i == 6 && intervals[0] > 10000) {
             intervals[0] = intervals[0] - 500;
           } 
-          else if (i != 6 && intervals[i] > 500)
+          else if (i != 6 && intervals[i] > 10000)
           {
             intervals[i] = intervals[i] - 500;
           }
@@ -720,8 +834,18 @@ void loop() {
         }
       }
     }   
+    if (isOptionsMenuOpen)
+    {
+      if (optionsMenuPosition == 4 && screenLightTime > 3000) 
+      {
+        screenLightTime = screenLightTime - 500;
+        optionsMenu();
+        delay(200L);
+      }
+    }
   }
-  //zmiana interwałów w góre
+  
+  //prawo
   if (btt_state_right == LOW ) {
     if (isIntervalMenuOpen)
     {
@@ -771,17 +895,27 @@ void loop() {
         }
       }
     }   
+    if (isOptionsMenuOpen)
+    {
+      if (optionsMenuPosition == 4 && screenLightTime < 30000) 
+      {
+        screenLightTime = screenLightTime + 500;
+        optionsMenu();
+        delay(200L);
+      }
+    }
   }
+  
   // potwierdzanie akcji
   if (btt_state_center == LOW || enableWatering) {
-    if (!isMenuOpen && !isIntervalMenuOpen && !isWateringMenuOpen)
+    if (!isMenuOpen && !isIntervalMenuOpen && !isWateringMenuOpen && !isOptionsMenuOpen)
     {    
       showMenu();
       delay(300L);
     } 
-    else if (isMenuOpen && !isIntervalMenuOpen && !isWateringMenuOpen)
+    else if (isMenuOpen && !isIntervalMenuOpen && !isWateringMenuOpen && !isOptionsMenuOpen)
      {
-      if (menuPosition == 0 || menuPosition == 7)
+      if (menuPosition == 0 || menuPosition == 8)
         {
           Serial.println("podlej wszystkie");
           if(waterLevel && !waterContainerOpen){
@@ -819,24 +953,28 @@ void loop() {
       if (menuPosition == 4)
         {
           Serial.println("Testuj");
+          for(byte i = 0; i < 8; i++) {
+            pixels.setPixelColor(i, pixels.Color(6, 255, 192));
+          }
+          pixels.show();
           delay(200L); 
         }
       if (menuPosition == 5)
         {
-          if (workMode == 1){
-            firstTimeLoop = true;
-          }
-          if (workMode == 2) {
-            workMode = 0;
-            Serial.println("ustawione 0");
-          } else {
-            workMode++;
-          }
+          Serial.println("Menu z wilgotnoscia");
+
+          
           
           showMenu();
           delay(200L); 
         }
-      if (menuPosition == 6 || menuPosition == -1)
+      if (menuPosition == 6)
+        {
+          isMenuOpen = false;
+          optionsMenu();
+          delay(200L); 
+        }
+      if (menuPosition == 7 || menuPosition == -1)
         {
           Serial.println("cofam do home screen");
           isMenuOpen = false;
@@ -845,7 +983,7 @@ void loop() {
           delay(200L); 
         }
     }
-    else if (isIntervalMenuOpen && !isMenuOpen && !isWateringMenuOpen)
+    else if (isIntervalMenuOpen && !isMenuOpen && !isWateringMenuOpen && !isOptionsMenuOpen)
      {
       if (intervalsMenuPosition == 5)
       {
@@ -869,7 +1007,7 @@ void loop() {
       }
       
     }
-    else if (isWateringMenuOpen && !isMenuOpen && !isIntervalMenuOpen)
+    else if (isWateringMenuOpen && !isMenuOpen && !isIntervalMenuOpen && !isOptionsMenuOpen)
      {
 
       for(byte i = 0; i < 5; i++){
@@ -910,5 +1048,79 @@ void loop() {
       }
       
     }
+    else if (isOptionsMenuOpen && !isWateringMenuOpen && !isMenuOpen && !isIntervalMenuOpen){
+      if(optionsMenuPosition == 0 || optionsMenuPosition == 7 ){
+        Serial.println("Tryb pracy zmieniam");
+          if (workMode == 1){
+            firstTimeLoop = true;
+          }
+          if (workMode == 2) {
+            workMode = 0;
+          } else {
+            workMode++;
+          }
+
+          optionsMenu();
+          delay(200L);
+      }
+      if(optionsMenuPosition == 1){
+        Serial.println("Dzwiek");
+        soundEnable = !soundEnable;
+        optionsMenu();
+        delay(200L);
+      }
+      if(optionsMenuPosition == 2){
+        Serial.println("LED");
+        isLedOn = !isLedOn;
+        optionsMenu();
+        delay(200L);
+      }
+      if(optionsMenuPosition == 3){
+        Serial.println("Resetuj czas");
+        resetTime = !resetTime;
+        optionsMenu();
+        delay(200L);
+      }
+      if(optionsMenuPosition == 4){
+        Serial.println("Ekran");
+
+        optionsMenu();
+        delay(200L);
+      }
+      if(optionsMenuPosition == 5){
+        Serial.println("Zapisz");
+
+        if(readValueFromEEPROMBool(addressesOPT[0]) != workMode){
+            Serial.println("Zapisano tryb pracy");
+            EEPROM.put(addressesOPT[0], workMode);
+        }
+        if(readValueFromEEPROMBool(addressesOPT[1]) != soundEnable){
+            Serial.println("Zapisano dźwięk");
+            EEPROM.put(addressesOPT[1], soundEnable);
+        }
+        if(readValueFromEEPROMBool(addressesOPT[2]) != isLedOn){
+            Serial.println("Zapisano stan led");
+            EEPROM.put(addressesOPT[2], isLedOn);
+        }
+        if(readValueFromEEPROMBool(addressesOPT[3]) != resetTime){
+            Serial.println("Zapisano resetowanie");
+            EEPROM.put(addressesOPT[3], resetTime);
+        }
+        if(readValueFromEEPROM(addressesOPT[4]) != screenLightTime){
+            Serial.println("Zapisano długość podświetlenia");
+            EEPROM.put(addressesOPT[4], screenLightTime);
+        }
+        lcdPrint(0,0, "-> Zapisano!");        
+        delay(200L);
+      }
+      if(optionsMenuPosition == 6 || optionsMenuPosition == -1){
+        Serial.println("cofam do menu");
+        isOptionsMenuOpen = false;
+        optionsMenuPosition = 0;
+        showMenu();
+        delay(200L); 
+      }
+    }
   }
 }
+ 
